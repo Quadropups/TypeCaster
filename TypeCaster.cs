@@ -19,7 +19,7 @@ public static class TypeCaster<T, TResult> {
             return;
         }
 
-        //Then we try to use one of the custom casters
+        //Then we try to return T as TResult (if T inherits from TResult)
         if (TrySetInheritCast()) {
             return;
         }
@@ -29,14 +29,19 @@ public static class TypeCaster<T, TResult> {
             return;
         }
 
-        //Then we try to simply return casted type as desired type. This will work with exact matches, derived types and if we cast enum to/from it's underlying type (int, long, etc)
-        //This method won't work if desired type is System.Object and casted type is a ValueType because this method will fail to box casted data
-        if (TrySetDefaultConverter()) {
+        //Then we try to find a casting operator on T and TResult
+        if (TrySetOperatorMethod()) {
             return;
         }
 
-        //Then we try to find a casting operator on T and TResult
-        if (TrySetOperatorMethod()) {
+        //Then we try to use one of the static custom casters
+        if (TrySetStaticCaster()) {
+            return;
+        }
+
+        //Then we try to simply return casted type as desired type. This will work with exact matches, derived types and if we cast enum to/from it's underlying type (int, long, etc)
+        //This method won't work if desired type is System.Object and casted type is a ValueType because this method will fail to box casted data
+        if (TrySetDefaultConverter()) {
             return;
         }
 
@@ -59,6 +64,18 @@ public static class TypeCaster<T, TResult> {
     public static bool IsValid => CastFunc.Method != ((Func<T, TResult>)SafeCast).Method;
 
     public static TResult Cast(T value) => CastFunc(value);
+
+    public static IEnumerable<MethodInfo> GetOperatorCasters() {
+        foreach (Type type in GetTypes(false)) {
+            foreach (MethodInfo m in type.GetMethods(BindingFlags.Static | BindingFlags.Public)) {
+                if (!m.IsSpecialName) continue;
+                if (m.Name != "op_Implicit" && m.Name != "op_Explicit") continue;
+                yield return m;
+            }
+        }
+    }
+
+   
 
     private static TResult CastEnumToEnumByte(byte value) => TypeCaster<byte, TResult>.CastFunc(value);
 
@@ -87,31 +104,6 @@ public static class TypeCaster<T, TResult> {
         return TypeCaster<TDefault, TResult>.Cast(temp);
     }
 
-    public static IEnumerable<MethodInfo> GetCasterMethods() {
-        foreach (Type type in GetTypes(true)) {
-            MethodInfo[] methods = type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-            foreach (MethodInfo method in methods) {
-                TypeCasterAttribute attribute = method.GetCustomAttribute<TypeCasterAttribute>();
-                if (attribute == null) continue;
-
-                if (method.ReturnType == typeof(void)) {
-                    continue;
-                }
-
-                if (method.IsStatic) {
-                    continue;
-                }
-
-                if (method.GetParameters().Length > 0) {
-                    continue;
-                }
-
-                yield return method;
-            }
-        }
-    }
-
     private static IEnumerable<DefaultTypeCasterAttribute> GetDefaultCasterAttributes() {
         foreach (Type type in GetTypes(typeof(T), true)) {
             IEnumerable<DefaultTypeCasterAttribute> attributes = type.GetCustomAttributes<DefaultTypeCasterAttribute>();
@@ -119,44 +111,44 @@ public static class TypeCaster<T, TResult> {
         }
     }
 
-    public static IEnumerable<MethodInfo> GetOperatorCasters() {
-        foreach (Type type in GetTypes(false)) {
-            foreach (MethodInfo m in type.GetMethods(BindingFlags.Static | BindingFlags.Public)) {
-                if (!m.IsSpecialName) continue;
-                if (m.Name != "op_Implicit" && m.Name != "op_Explicit") continue;
-                yield return m;
-            }
-        }
-    }
-
     private static MethodInfo GetTestedMethod(MethodInfo method) {
         if (!method.IsGenericMethod) {
-            if (MethodIsCompatible(method)) {
+            if (InstanceMethodIsCompatible(method)) {
                 return method;
             }
         }
         else {
+            bool returnTypeContainsGenericParameters = method.ReturnType.ContainsGenericParameters;
+
             foreach (var t in GetTypes(typeof(TResult), true)) {
                 MethodInfo specific = null;
+                Type[] typeArguments;
 
-                if (method.ReturnType.IsGenericParameter) {
-                    try {
-                        specific = method.MakeGenericMethod(t);
-                    }
-                    catch { }
+                if (returnTypeContainsGenericParameters) {
+                    typeArguments = t.GetGenericArguments();
                 }
-                else if (method.ReturnType.ContainsGenericParameters) {
-                    try {
-                        specific = method.MakeGenericMethod(t.GetGenericArguments());
-                    }
-                    catch { }
+                else {
+                    typeArguments = new Type[] { t };
+
                 }
 
-                if (MethodIsCompatible(specific)) return specific;
+                try {
+                    specific = method.MakeGenericMethod(typeArguments);
+                }
+                catch {
+                    continue;
+                }
+
+                if (InstanceMethodIsCompatible(specific)) return specific;
             }
         }
 
         return null;
+    }
+
+    private static bool InstanceMethodIsCompatible(MethodInfo method) {
+        if (!typeof(TResult).IsAssignableFrom(method.ReturnType)) return false;
+        return true;
     }
 
     private static IEnumerable<Type> GetTypes(bool getInterfaces) {
@@ -187,12 +179,6 @@ public static class TypeCaster<T, TResult> {
         }
     }
 
-    private static bool MethodIsCompatible(MethodInfo method) {
-        if (method == null) return false;
-        if (!typeof(TResult).IsAssignableFrom(method.ReturnType)) return false;
-        if (!method.ReflectedType.IsAssignableFrom(typeof(T))) return false;
-        return true;
-    }
 
     private static TResult SafeCast(T value) {
         if (value is TResult cast) return cast;
@@ -250,6 +236,27 @@ public static class TypeCaster<T, TResult> {
         return false;
     }
 
+    private static IEnumerable<MethodInfo> GetCasterMethods() {
+        foreach (Type type in GetTypes(typeof(T), true)) {
+            MethodInfo[] methods = type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+            foreach (MethodInfo method in methods) {
+                TypeCasterAttribute attribute = method.GetCustomAttribute<TypeCasterAttribute>();
+                if (attribute == null) continue;
+
+                if (method.ReturnType == typeof(void)) {
+                    continue;
+                }
+
+                if (method.GetParameters().Length > 0) {
+                    continue;
+                }
+
+                yield return method;
+            }
+        }
+    }
+
     private static bool TrySetDefaultConverter() {
         MethodInfo method = typeof(TypeCaster<T, TResult>).GetMethod(nameof(DefaultCast), BindingFlags.Static | BindingFlags.NonPublic);
         Func<T, TResult> func;
@@ -303,11 +310,122 @@ public static class TypeCaster<T, TResult> {
 
     private static bool TrySetOperatorMethod() {
         foreach (MethodInfo method in GetOperatorCasters()) {
-            if (!typeof(TResult).IsAssignableFrom(method.ReturnType)) continue;
-            if (!method.GetParameters()[0].ParameterType.IsAssignableFrom(typeof(T))) continue;
+            if (!StaticMethodIsCompatible(method)) continue;
             CastFunc = CreateDelegate(method);
             return true;
         }
         return false;
+    }
+
+    private static bool TrySetStaticCaster() {
+        foreach (var m in GetStaticCasterMethods()) {
+            if (!StaticMethodIsCompatible(m)) continue;
+            CastFunc = CreateDelegate(m);
+            return true;
+        }
+        return false;
+    }
+
+    private static IEnumerable<MethodInfo> GetStaticCasterMethods() {
+        MethodInfo[] methods = typeof(GlobalTypeCasters).GetMethods(BindingFlags.Static | BindingFlags.Public);
+
+        foreach (MethodInfo method in methods) {
+            if (method.ReturnType == typeof(void)) {
+                continue;
+            }
+
+            if (method.GetParameters().Length != 1) {
+                continue;
+            }
+
+            if (method.IsGenericMethod) {
+                Type tTGeneric = method.ReturnType;
+                Type tResultGeneric = method.GetParameters()[0].ParameterType;
+
+                char tTChar = GetGenericParameterType(tTGeneric);
+                char tResultChar = GetGenericParameterType(tResultGeneric);
+
+                foreach (var t in GetTypes(true)) {
+                    MethodInfo specific = null;
+
+                    if (tTChar == 'T' || tResultChar == 'T') {
+                        try {
+                            specific = method.MakeGenericMethod(t);
+                        }
+                        catch {
+                        }
+                        if (specific != null) yield return specific;
+                    }
+
+                    if (tTChar == 't' || tResultChar == 't') {
+                        try {
+                            specific = method.MakeGenericMethod(t.GetGenericArguments());
+                        }
+                        catch {
+                        }
+                        if (specific != null) yield return specific;
+                    }
+                }
+
+                if (tTGeneric != tResultGeneric && tTChar != 's' && tResultChar != 's') {
+                    foreach (var tT in GetTypes(typeof(T), true)) {
+
+                        foreach (var tResult in GetTypes(typeof(TResult), true)) {
+
+                            List<Type> typeArgumentList = new List<Type>();
+
+                            if (tTChar == 'T') {
+                                typeArgumentList.Add(tT);
+                            }
+                            else if (tTChar == 't') {
+                                typeArgumentList.AddRange(tT.GetGenericArguments());
+                            }
+                            if (tResultChar == 'T') {
+                                typeArgumentList.Add(tResult);
+                            }
+                            else if (tResultChar == 't') {
+                                typeArgumentList.AddRange(tResult.GetGenericArguments());
+                            }
+
+                            MethodInfo specific = null;
+
+                            Type[] typeArguments = new Type[typeArgumentList.Count]; 
+
+                            for (int i = 0; i < typeArguments.Length; i++) {
+                                typeArguments[i] = typeArgumentList[i];
+                            }
+
+                            try {
+                                specific = method.MakeGenericMethod(typeArguments);
+                            }
+                            catch {
+                            }
+                            if (specific != null) yield return specific;
+                        }
+                    }
+                }
+            }
+            else {
+                yield return method;
+            }
+        }
+    }
+
+    private static char GetGenericParameterType(Type type) {
+        if (type.IsGenericParameter) {
+            return 'T';
+        }
+        else if (type.ContainsGenericParameters) {
+            return 't';
+        }
+        else {
+            return 's';
+        }
+    }
+
+    private static bool StaticMethodIsCompatible(MethodInfo method) {
+        if (!typeof(TResult).IsAssignableFrom(method.ReturnType)) return false;
+        if (!method.GetParameters()[0].ParameterType.IsAssignableFrom(typeof(T))) return false;
+        return true;
     }
 }
