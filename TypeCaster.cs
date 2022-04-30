@@ -65,7 +65,7 @@ public static class TypeCaster<T, TResult> {
 
     public static TResult Cast(T value) => CastFunc(value);
 
-    public static IEnumerable<MethodInfo> GetOperatorCasters() {
+    private static IEnumerable<MethodInfo> GetOperatorCasters() {
         foreach (Type type in GetTypes(false)) {
             foreach (MethodInfo m in type.GetMethods(BindingFlags.Static | BindingFlags.Public)) {
                 if (!m.IsSpecialName) continue;

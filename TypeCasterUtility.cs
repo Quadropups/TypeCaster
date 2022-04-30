@@ -54,12 +54,12 @@ public static class TypeCasterUtility {
 
     /// <summary>Get all custom casters and casting operator for specified type. This method only returns casters defined in this type and types it inherits from.</summary>
     public static IEnumerable<MethodInfo> GetCasters(Type type) {
-        Type caster = typeof(TypeCaster<,>).MakeGenericType(typeof(object), type);
-        foreach (MethodInfo method in (IEnumerable<MethodInfo>)caster.GetMethod("GetCasterMethods", BindingFlags.Public | BindingFlags.Static).Invoke(null, null)) {
+        Type caster = typeof(TypeCaster<,>).MakeGenericType(type, typeof(object));
+        foreach (MethodInfo method in (IEnumerable<MethodInfo>)caster.GetMethod("GetCasterMethods", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null)) {
             if (type.IsAssignableFrom(method.ReturnType)) continue;
             yield return method;
         }
-        foreach (MethodInfo method in (IEnumerable<MethodInfo>)caster.GetMethod("GetOperatorCasters", BindingFlags.Public | BindingFlags.Static).Invoke(null, null)) {
+        foreach (MethodInfo method in (IEnumerable<MethodInfo>)caster.GetMethod("GetOperatorCasters", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, null)) {
             if (type.IsAssignableFrom(method.ReturnType)) continue;
             yield return method;
         }
